@@ -50,4 +50,4 @@ jobs:
             --no-allow-unauthenticated \
             --platform managed \
             --quiet \
-            --update-env-vars "PROJECT_ID=${{ env.PROJECT_ID }},BQ_DATASET=finnhub_data,SYMBOLS=AAPL,TSLA,BTC-USD,FAST_MA=20,SLOW_MA=50,LOG_LEVEL=INFO"
+            --update-env-vars "PROJECT_ID=${{ env.PROJECT_ID }},BQ_DATASET=finnhub_data,SYMBOLS=AAPL\,TSLA\,BTC-USD,FAST_MA=20,SLOW_MA=50,LOG_LEVEL=INFO"
