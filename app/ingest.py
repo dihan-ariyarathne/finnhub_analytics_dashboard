@@ -47,15 +47,26 @@ def fetch_prices(symbol: str, start_override: Optional[datetime] = None, end_ove
         logger.info("%s up-to-date; start=%s end=%s", symbol, start.date(), end.date())
         return pd.DataFrame(columns=["date","open","high","low","close","adj_close","volume","load_ts"])  # up-to-date
 
-    # Special handling for BTC-USD via Finnhub if API key present
-    if symbol.upper() == "BTC-USD" and config.FINNHUB_API_KEY and finnhub is not None:
-        try:
-            df_fh = _fetch_btc_finnhub(start, end)
-            if not df_fh.empty:
-                logger.info("Finnhub fetched %d rows for BTC-USD", len(df_fh))
-                return df_fh
-        except Exception as e:
-            logger.warning("Finnhub crypto fetch failed: %s; will try Yahoo", e)
+    # Special handling for BTC-USD: try Alpha Vantage (if key), then Finnhub (if key), then Binance, then Yahoo
+    if symbol.upper() == "BTC-USD":
+        if config.ALPHAVANTAGE_API_KEY:
+            df_av = _fetch_btc_alphavantage(start, end)
+            if not df_av.empty:
+                logger.info("AlphaVantage fetched %d rows for BTC-USD", len(df_av))
+                return df_av
+        if config.FINNHUB_API_KEY and finnhub is not None:
+            try:
+                df_fh = _fetch_btc_finnhub(start, end)
+                if not df_fh.empty:
+                    logger.info("Finnhub fetched %d rows for BTC-USD", len(df_fh))
+                    return df_fh
+            except Exception as e:
+                logger.warning("Finnhub crypto fetch failed: %s; trying Binance", e)
+        # Binance public market data (USDT treated ~ USD)
+        df_bi = _fetch_btc_binance(start, end)
+        if not df_bi.empty:
+            logger.info("Binance fetched %d rows for BTC-USD (USDT)", len(df_bi))
+            return df_bi
 
     sess = _requests_session()
     tries = 3
@@ -131,6 +142,112 @@ def _fetch_btc_finnhub(start: datetime, end: datetime) -> pd.DataFrame:
         "volume": data.get("v", [None] * len(data["c"]))
     })
     df["adj_close"] = df["close"]
+    df["load_ts"] = datetime.utcnow()
+    return df[["date","open","high","low","close","adj_close","volume","load_ts"]]
+
+
+def _fetch_btc_alphavantage(start: datetime, end: datetime) -> pd.DataFrame:
+    """Fetch BTC-USD daily from Alpha Vantage if API key is set.
+
+    API: https://www.alphavantage.co/documentation/#digital-currency-daily
+    """
+    import pandas as pd
+    key = config.ALPHAVANTAGE_API_KEY
+    if not key:
+        return pd.DataFrame()
+    url = (
+        "https://www.alphavantage.co/query"
+        "?function=DIGITAL_CURRENCY_DAILY&symbol=BTC&market=USD&apikey=" + key
+    )
+    resp = requests.get(url, timeout=30)
+    if resp.status_code != 200:
+        return pd.DataFrame()
+    js = resp.json()
+    data = js.get("Time Series (Digital Currency Daily)", {})
+    if not data:
+        return pd.DataFrame()
+    recs = []
+    for d, vals in data.items():
+        # AV keys: '1a. open (USD)', '2a. high (USD)', '3a. low (USD)', '4a. close (USD)', '5. volume'
+        try:
+            recs.append({
+                "date": pd.to_datetime(d).date(),
+                "open": float(vals.get("1a. open (USD)", 0.0)),
+                "high": float(vals.get("2a. high (USD)", 0.0)),
+                "low": float(vals.get("3a. low (USD)", 0.0)),
+                "close": float(vals.get("4a. close (USD)", 0.0)),
+                "adj_close": float(vals.get("4a. close (USD)", 0.0)),
+                "volume": float(vals.get("5. volume", 0.0)),
+            })
+        except Exception:
+            continue
+    if not recs:
+        return pd.DataFrame()
+    df = pd.DataFrame(recs)
+    df = df[(df["date"] >= pd.to_datetime(start.date())) & (df["date"] <= pd.to_datetime(end.date()))]
+    if df.empty:
+        return pd.DataFrame()
+    df["load_ts"] = datetime.utcnow()
+    return df[["date","open","high","low","close","adj_close","volume","load_ts"]]
+
+
+def _fetch_btc_binance(start: datetime, end: datetime) -> pd.DataFrame:
+    """Fetch BTCUSDT daily klines from Binance public API (no key).
+
+    Treat USDT ~= USD for close values.
+    """
+    import math
+    import pandas as pd
+    base = "https://api.binance.com/api/v3/klines"
+    # Binance returns max 1000 bars per call; loop if needed
+    start_ms = int(datetime(start.year, start.month, start.day).timestamp() * 1000)
+    end_ms = int(datetime(end.year, end.month, end.day).timestamp() * 1000)
+    limit = 1000
+    all_rows = []
+    next_start = start_ms
+    s = _requests_session()
+    while next_start <= end_ms:
+        params = {
+            "symbol": "BTCUSDT",
+            "interval": "1d",
+            "startTime": next_start,
+            "endTime": end_ms,
+            "limit": limit,
+        }
+        r = s.get(base, params=params, timeout=30)
+        if r.status_code != 200:
+            break
+        arr = r.json()
+        if not arr:
+            break
+        all_rows.extend(arr)
+        # Each item: [openTime, open, high, low, close, volume, closeTime, ...]
+        last_close_time = arr[-1][6]
+        # Advance to last_close_time + 1ms to avoid duplicates
+        next_start = int(last_close_time) + 1
+        if len(arr) < limit:
+            break
+    if not all_rows:
+        return pd.DataFrame()
+    rows = []
+    for it in all_rows:
+        try:
+            rows.append({
+                "date": pd.to_datetime(int(it[0]), unit="ms").date(),
+                "open": float(it[1]),
+                "high": float(it[2]),
+                "low": float(it[3]),
+                "close": float(it[4]),
+                "adj_close": float(it[4]),
+                "volume": float(it[5]),
+            })
+        except Exception:
+            continue
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df = df.sort_values("date")
+    df = df[(df["date"] >= pd.to_datetime(start.date())) & (df["date"] <= pd.to_datetime(end.date()))]
     df["load_ts"] = datetime.utcnow()
     return df[["date","open","high","low","close","adj_close","volume","load_ts"]]
 
