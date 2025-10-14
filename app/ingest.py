@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from time import sleep
 from typing import Tuple
 
+import logging
 import pandas as pd
 import yfinance as yf
+import requests
 
 from . import bq
 
@@ -16,18 +19,57 @@ def _default_start(symbol: str) -> datetime:
     return datetime(2015, 1, 1)
 
 
+def _requests_session() -> requests.Session:
+    s = requests.Session()
+    # Explicit User-Agent to avoid occasional 403/empty responses in server environments
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        )
+    })
+    return s
+
+
 def fetch_prices(symbol: str) -> pd.DataFrame:
+    logger = logging.getLogger(__name__)
     last = bq.max_date(symbol)
     start = datetime.combine(last + timedelta(days=1), datetime.min.time()) if last else _default_start(symbol)
     end = datetime.utcnow()
 
     if start.date() > end.date():
+        logger.info("%s up-to-date; start=%s end=%s", symbol, start.date(), end.date())
         return pd.DataFrame(columns=["date","open","high","low","close","adj_close","volume","load_ts"])  # up-to-date
 
-    tkr = yf.Ticker(symbol)
-    hist = tkr.history(start=start.date(), end=end.date(), interval="1d", auto_adjust=False)
+    sess = _requests_session()
+    tries = 3
+    hist = pd.DataFrame()
+    for attempt in range(1, tries + 1):
+        try:
+            # yfinance.download is more robust than Ticker.history in headless environments
+            hist = yf.download(
+                tickers=symbol,
+                start=start.date(),
+                end=end.date(),
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+                session=sess,
+            )
+        except Exception as e:
+            logger.warning("yfinance download failed for %s (attempt %d/%d): %s", symbol, attempt, tries, e)
+        if not hist.empty:
+            break
+        sleep(1 * attempt)
+
     if hist.empty:
+        logger.error("No data returned for %s; start=%s end=%s", symbol, start.date(), end.date())
         return pd.DataFrame(columns=["date","open","high","low","close","adj_close","volume","load_ts"])  # nothing new
+
+    # Ensure columns are flat and named consistently
+    if isinstance(hist.columns, pd.MultiIndex):
+        hist.columns = hist.columns.get_level_values(0)
 
     hist = hist.reset_index().rename(columns={
         "Date": "date",
@@ -40,6 +82,7 @@ def fetch_prices(symbol: str) -> pd.DataFrame:
     })
     hist["date"] = pd.to_datetime(hist["date"]).dt.date
     hist["load_ts"] = datetime.utcnow()
+    logger.info("Fetched %d rows for %s (%s -> %s)", len(hist), symbol, start.date(), end.date())
     return hist[["date","open","high","low","close","adj_close","volume","load_ts"]]
 
 
@@ -71,4 +114,3 @@ def run_for_symbol(symbol: str, fast: int, slow: int) -> Tuple[int, int]:
         if not pred.empty:
             n_preds = bq.upsert_predictions(symbol, pred)
     return n_prices, n_preds
-
