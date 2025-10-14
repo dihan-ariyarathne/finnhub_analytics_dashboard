@@ -13,7 +13,6 @@ env:
   REGION: us-central1
   AR_REPO: finnhub-dash
   SERVICE: finnhub-dash
-  IMAGE: us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/app:${{ github.sha }}
 
 jobs:
   deploy:
@@ -31,6 +30,9 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
+
+      - name: Set IMAGE env
+        run: echo "IMAGE=us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/app:${{ github.sha }}" >> $GITHUB_ENV
 
       - name: Build and push image (Cloud Build)
         run: gcloud builds submit --tag $IMAGE
