@@ -50,6 +50,7 @@ jobs:
           FAST_MA: "20"
           SLOW_MA: "50"
           LOG_LEVEL: "INFO"
+          FINNHUB_API_KEY: "${{ secrets.FINNHUB_API_KEY }}"
           EOF
           gcloud run deploy $SERVICE \
             --image $IMAGE \

@@ -8,6 +8,12 @@ import logging
 import pandas as pd
 import yfinance as yf
 import requests
+from . import config
+
+try:
+    import finnhub  # type: ignore
+except Exception:  # library optional
+    finnhub = None
 
 from . import bq
 
@@ -40,6 +46,16 @@ def fetch_prices(symbol: str) -> pd.DataFrame:
     if start.date() > end.date():
         logger.info("%s up-to-date; start=%s end=%s", symbol, start.date(), end.date())
         return pd.DataFrame(columns=["date","open","high","low","close","adj_close","volume","load_ts"])  # up-to-date
+
+    # Special handling for BTC-USD via Finnhub if API key present
+    if symbol.upper() == "BTC-USD" and config.FINNHUB_API_KEY and finnhub is not None:
+        try:
+            df_fh = _fetch_btc_finnhub(start, end)
+            if not df_fh.empty:
+                logger.info("Finnhub fetched %d rows for BTC-USD", len(df_fh))
+                return df_fh
+        except Exception as e:
+            logger.warning("Finnhub crypto fetch failed: %s; will try Yahoo", e)
 
     sess = _requests_session()
     tries = 3
@@ -91,6 +107,32 @@ def fetch_prices(symbol: str) -> pd.DataFrame:
             logger.warning("Stooq fallback failed for %s: %s", symbol, e)
         logger.error("No data returned for %s; start=%s end=%s", symbol, start.date(), end.date())
         return pd.DataFrame(columns=["date","open","high","low","close","adj_close","volume","load_ts"])  # nothing new
+
+
+def _fetch_btc_finnhub(start: datetime, end: datetime) -> pd.DataFrame:
+    """Fetch BTC-USD daily candles from Finnhub (requires FINNHUB_API_KEY)."""
+    assert config.FINNHUB_API_KEY
+    cli = finnhub.Client(api_key=config.FINNHUB_API_KEY)  # type: ignore
+    # Use Coinbase spot market which denominates in USD
+    symbol = "COINBASE:BTC-USD"
+    fr = int(datetime(start.year, start.month, start.day).timestamp())
+    to = int(datetime(end.year, end.month, end.day).timestamp())
+    data = cli.crypto_candles(symbol, "D", fr, to)
+    if not data or data.get("s") != "ok":
+        return pd.DataFrame()
+    import pandas as pd  # local import to keep namespace tidy
+
+    df = pd.DataFrame({
+        "date": pd.to_datetime(data["t"], unit="s").date,
+        "open": data["o"],
+        "high": data["h"],
+        "low": data["l"],
+        "close": data["c"],
+        "volume": data.get("v", [None] * len(data["c"]))
+    })
+    df["adj_close"] = df["close"]
+    df["load_ts"] = datetime.utcnow()
+    return df[["date","open","high","low","close","adj_close","volume","load_ts"]]
 
     # Ensure columns are flat and named consistently
     if isinstance(hist.columns, pd.MultiIndex):

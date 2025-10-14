@@ -15,4 +15,4 @@ SYMBOLS: List[str] = [s.strip() for s in get_env("SYMBOLS", "AAPL,TSLA,BTC-USD")
 FAST_MA = int(get_env("FAST_MA", "20"))
 SLOW_MA = int(get_env("SLOW_MA", "50"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")

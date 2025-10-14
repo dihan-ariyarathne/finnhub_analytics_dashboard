@@ -7,3 +7,4 @@ google-cloud-logging==3.10.0
 pyarrow==17.0.0
 pandas-gbq==0.24.0
 pandas-datareader==0.10.0
+finnhub-python==2.4.18
