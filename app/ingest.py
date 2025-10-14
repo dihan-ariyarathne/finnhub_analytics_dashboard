@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from time import sleep
-from typing import Tuple
+from typing import Tuple, Optional
 
 import logging
 import pandas as pd
@@ -37,11 +37,11 @@ def _requests_session() -> requests.Session:
     return s
 
 
-def fetch_prices(symbol: str) -> pd.DataFrame:
+def fetch_prices(symbol: str, start_override: Optional[datetime] = None, end_override: Optional[datetime] = None) -> pd.DataFrame:
     logger = logging.getLogger(__name__)
     last = bq.max_date(symbol)
-    start = datetime.combine(last + timedelta(days=1), datetime.min.time()) if last else _default_start(symbol)
-    end = datetime.utcnow()
+    start = start_override or (datetime.combine(last + timedelta(days=1), datetime.min.time()) if last else _default_start(symbol))
+    end = end_override or datetime.utcnow()
 
     if start.date() > end.date():
         logger.info("%s up-to-date; start=%s end=%s", symbol, start.date(), end.date())
@@ -173,6 +173,20 @@ def run_for_symbol(symbol: str, fast: int, slow: int) -> Tuple[int, int]:
     bq.ensure_price_table(symbol)
     bq.ensure_prediction_table(symbol)
     prices = fetch_prices(symbol)
+    n_prices = 0
+    n_preds = 0
+    if not prices.empty:
+        n_prices = bq.upsert_prices(symbol, prices)
+        pred = compute_ma_predictions(prices, fast, slow)
+        if not pred.empty:
+            n_preds = bq.upsert_predictions(symbol, pred)
+    return n_prices, n_preds
+
+
+def backfill_symbol(symbol: str, fast: int, slow: int, start_date: datetime, end_date: Optional[datetime] = None) -> Tuple[int, int]:
+    bq.ensure_price_table(symbol)
+    bq.ensure_prediction_table(symbol)
+    prices = fetch_prices(symbol, start_override=start_date, end_override=end_date)
     n_prices = 0
     n_preds = 0
     if not prices.empty:
