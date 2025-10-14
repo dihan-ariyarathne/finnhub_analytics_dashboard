@@ -58,4 +58,4 @@ jobs:
             --no-allow-unauthenticated \
             --platform managed \
             --quiet \
-            --env-vars-file=env.txt
+            --set-env-vars-file=env.txt
