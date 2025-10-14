@@ -64,6 +64,31 @@ def fetch_prices(symbol: str) -> pd.DataFrame:
         sleep(1 * attempt)
 
     if hist.empty:
+        logger.warning("Yahoo returned empty for %s; trying stooq fallback", symbol)
+        try:
+            import pandas_datareader.data as pdr
+
+            stooq_symbol = symbol
+            if symbol.upper() == "BTC-USD":
+                stooq_symbol = "BTCUSD"
+            sdf = pdr.DataReader(stooq_symbol, "stooq", start=start.date(), end=end.date())
+            if not sdf.empty:
+                sdf = sdf.sort_index()
+                sdf = sdf.reset_index().rename(columns={
+                    "Date": "date",
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume",
+                })
+                sdf["adj_close"] = sdf["close"]
+                sdf["date"] = pd.to_datetime(sdf["date"]).dt.date
+                sdf["load_ts"] = datetime.utcnow()
+                logger.info("Stooq fallback fetched %d rows for %s", len(sdf), symbol)
+                return sdf[["date","open","high","low","close","adj_close","volume","load_ts"]]
+        except Exception as e:
+            logger.warning("Stooq fallback failed for %s: %s", symbol, e)
         logger.error("No data returned for %s; start=%s end=%s", symbol, start.date(), end.date())
         return pd.DataFrame(columns=["date","open","high","low","close","adj_close","volume","load_ts"])  # nothing new
 
