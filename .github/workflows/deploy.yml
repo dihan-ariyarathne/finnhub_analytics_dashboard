@@ -43,6 +43,14 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
+          cat > env.txt << 'EOF'
+          PROJECT_ID=${{ env.PROJECT_ID }}
+          BQ_DATASET=finnhub_data
+          SYMBOLS=AAPL,TSLA,BTC-USD
+          FAST_MA=20
+          SLOW_MA=50
+          LOG_LEVEL=INFO
+          EOF
           gcloud run deploy $SERVICE \
             --image $IMAGE \
             --region $REGION \
@@ -50,4 +58,4 @@ jobs:
             --no-allow-unauthenticated \
             --platform managed \
             --quiet \
-            --update-env-vars "PROJECT_ID=${{ env.PROJECT_ID }},BQ_DATASET=finnhub_data,SYMBOLS=AAPL\,TSLA\,BTC-USD,FAST_MA=20,SLOW_MA=50,LOG_LEVEL=INFO"
+            --env-vars-file=env.txt
