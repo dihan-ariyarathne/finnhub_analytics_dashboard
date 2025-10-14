@@ -34,13 +34,8 @@ jobs:
       - name: Set IMAGE env
         run: echo "IMAGE=us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/app:${{ github.sha }}" >> $GITHUB_ENV
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-
-      - name: Build and push image (Docker)
-        run: |
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+      - name: Build and push image (Cloud Build)
+        run: gcloud builds submit --tag $IMAGE
 
       - name: Deploy to Cloud Run
         run: |
