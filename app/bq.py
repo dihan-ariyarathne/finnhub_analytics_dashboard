@@ -116,8 +116,30 @@ def upsert_prices(symbol: str, df) -> int:
 def upsert_predictions(symbol: str, df) -> int:
     bq = client()
     target = table_id(f"pred_ma_crossover_{symbol.lower().replace('-', '_')}")
-    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+
+    # Enforce stable dtypes to avoid BQ inference surprises
+    df = df.copy()
+    if "signal" in df.columns:
+        df["signal"] = df["signal"].astype("string")
+    if "next_day_signal" in df.columns:
+        df["next_day_signal"] = df["next_day_signal"].astype("string")
+    if "model_version" in df.columns:
+        df["model_version"] = df["model_version"].astype("string")
+
     temp_table = table_id(f"_tmp_pred_{symbol.lower().replace('-', '_')}")
+    temp_schema = [
+        bigquery.SchemaField("as_of", "DATE"),
+        bigquery.SchemaField("fast_ma", "FLOAT64"),
+        bigquery.SchemaField("slow_ma", "FLOAT64"),
+        bigquery.SchemaField("signal", "STRING"),
+        bigquery.SchemaField("next_day_signal", "STRING"),
+        bigquery.SchemaField("model_version", "STRING"),
+        bigquery.SchemaField("load_ts", "TIMESTAMP"),
+    ]
+    job_config = bigquery.LoadJobConfig(
+        write_disposition="WRITE_TRUNCATE",
+        schema=temp_schema,
+    )
     bq.load_table_from_dataframe(df, temp_table, job_config=job_config).result()
 
     merge_sql = f"""
@@ -140,4 +162,3 @@ def upsert_predictions(symbol: str, df) -> int:
     except Exception:
         pass
     return len(df)
-
