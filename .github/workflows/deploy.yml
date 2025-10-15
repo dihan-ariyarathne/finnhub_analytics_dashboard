@@ -46,7 +46,7 @@ jobs:
           cat > env.yaml << 'EOF'
           PROJECT_ID: "${{ env.PROJECT_ID }}"
           BQ_DATASET: "finnhub_data"
-          SYMBOLS: "AAPL,TSLA,BTC-USD"
+          SYMBOLS: "AAPL,TSLA,MSFT"
           FAST_MA: "20"
           SLOW_MA: "50"
           LOG_LEVEL: "INFO"

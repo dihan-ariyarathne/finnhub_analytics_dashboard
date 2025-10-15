@@ -18,7 +18,7 @@ FastAPI service on Cloud Run that ingests daily prices from Yahoo Finance into B
 ## Environment Variables (Cloud Run)
 - `PROJECT_ID` e.g., `finnhub-dashboard`
 - `BQ_DATASET` e.g., `finnhub_data`
-- `SYMBOLS` CSV, e.g., `AAPL,TSLA,BTC-USD`
+- `SYMBOLS` CSV, e.g., `AAPL,TSLA,MSFT`
 - `FAST_MA` default `20`
 - `SLOW_MA` default `50`
 - `LOG_LEVEL` default `INFO`
@@ -72,4 +72,3 @@ Created on first run if missing (one set per symbol):
 - `app/service.py:1` FastAPI app (`/health`, `/run`)
 - `Dockerfile:1` container entrypoint (Uvicorn)
 - `.github/workflows/deploy.yml:1` CI/CD to Cloud Run
-
