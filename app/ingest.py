@@ -134,7 +134,7 @@ def _fetch_btc_finnhub(start: datetime, end: datetime) -> pd.DataFrame:
     import pandas as pd  # local import to keep namespace tidy
 
     df = pd.DataFrame({
-        "date": pd.to_datetime(data["t"], unit="s").date,
+        "date": pd.to_datetime(data["t"], unit="s").dt.date,
         "open": data["o"],
         "high": data["h"],
         "low": data["l"],
@@ -184,7 +184,11 @@ def _fetch_btc_alphavantage(start: datetime, end: datetime) -> pd.DataFrame:
     if not recs:
         return pd.DataFrame()
     df = pd.DataFrame(recs)
-    df = df[(df["date"] >= pd.to_datetime(start.date())) & (df["date"] <= pd.to_datetime(end.date()))]
+    # Normalize to native date and filter using date objects
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    start_d = start.date()
+    end_d = end.date()
+    df = df[(df["date"] >= start_d) & (df["date"] <= end_d)]
     if df.empty:
         return pd.DataFrame()
     df["load_ts"] = datetime.utcnow()
@@ -247,7 +251,11 @@ def _fetch_btc_binance(start: datetime, end: datetime) -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     df = df.sort_values("date")
-    df = df[(df["date"] >= pd.to_datetime(start.date())) & (df["date"] <= pd.to_datetime(end.date()))]
+    # Normalize to native date and filter using date objects
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    start_d = start.date()
+    end_d = end.date()
+    df = df[(df["date"] >= start_d) & (df["date"] <= end_d)]
     df["load_ts"] = datetime.utcnow()
     return df[["date","open","high","low","close","adj_close","volume","load_ts"]]
 
