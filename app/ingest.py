@@ -37,6 +37,26 @@ def _requests_session() -> requests.Session:
     return s
 
 
+def _finalize_prices_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure schema/dtypes expected by BigQuery (volume as INT64).
+
+    - Coerce volume to numeric, round to nearest integer, cast to pandas 'Int64' (nullable).
+    - Keep dates as native date objects for BQ DATE.
+    """
+    if df.empty:
+        return df
+    out = df.copy()
+    if "volume" in out.columns:
+        out["volume"] = pd.to_numeric(out["volume"], errors="coerce")
+        out["volume"] = out["volume"].round().astype("Int64")
+    # Enforce column order if all present
+    cols = ["date", "open", "high", "low", "close", "adj_close", "volume", "load_ts"]
+    missing = [c for c in cols if c not in out.columns]
+    if not missing:
+        out = out[cols]
+    return out
+
+
 def fetch_prices(symbol: str, start_override: Optional[datetime] = None, end_override: Optional[datetime] = None) -> pd.DataFrame:
     logger = logging.getLogger(__name__)
     last = bq.max_date(symbol)
@@ -53,20 +73,20 @@ def fetch_prices(symbol: str, start_override: Optional[datetime] = None, end_ove
             df_av = _fetch_btc_alphavantage(start, end)
             if not df_av.empty:
                 logger.info("AlphaVantage fetched %d rows for BTC-USD", len(df_av))
-                return df_av
+                return _finalize_prices_df(df_av)
         if config.FINNHUB_API_KEY and finnhub is not None:
             try:
                 df_fh = _fetch_btc_finnhub(start, end)
                 if not df_fh.empty:
                     logger.info("Finnhub fetched %d rows for BTC-USD", len(df_fh))
-                    return df_fh
+                    return _finalize_prices_df(df_fh)
             except Exception as e:
                 logger.warning("Finnhub crypto fetch failed: %s; trying Binance", e)
         # Binance public market data (USDT treated ~ USD)
         df_bi = _fetch_btc_binance(start, end)
         if not df_bi.empty:
             logger.info("Binance fetched %d rows for BTC-USD (USDT)", len(df_bi))
-            return df_bi
+            return _finalize_prices_df(df_bi)
 
     sess = _requests_session()
     tries = 3
@@ -113,7 +133,7 @@ def fetch_prices(symbol: str, start_override: Optional[datetime] = None, end_ove
                 sdf["date"] = pd.to_datetime(sdf["date"]).dt.date
                 sdf["load_ts"] = datetime.utcnow()
                 logger.info("Stooq fallback fetched %d rows for %s", len(sdf), symbol)
-                return sdf[["date","open","high","low","close","adj_close","volume","load_ts"]]
+                return _finalize_prices_df(sdf[["date","open","high","low","close","adj_close","volume","load_ts"]])
         except Exception as e:
             logger.warning("Stooq fallback failed for %s: %s", symbol, e)
         logger.error("No data returned for %s; start=%s end=%s", symbol, start.date(), end.date())
@@ -275,7 +295,7 @@ def _fetch_btc_binance(start: datetime, end: datetime) -> pd.DataFrame:
     hist["date"] = pd.to_datetime(hist["date"]).dt.date
     hist["load_ts"] = datetime.utcnow()
     logger.info("Fetched %d rows for %s (%s -> %s)", len(hist), symbol, start.date(), end.date())
-    return hist[["date","open","high","low","close","adj_close","volume","load_ts"]]
+    return _finalize_prices_df(hist[["date","open","high","low","close","adj_close","volume","load_ts"]])
 
 
 def compute_ma_predictions(df: pd.DataFrame, fast: int, slow: int) -> pd.DataFrame:
