@@ -88,6 +88,30 @@ def fetch_prices(symbol: str, start_override: Optional[datetime] = None, end_ove
             logger.info("Binance fetched %d rows for BTC-USD (USDT)", len(df_bi))
             return _finalize_prices_df(df_bi)
 
+    # For equities: prefer Stooq first (more reliable in serverless), then Yahoo, then Alpha Vantage (if key)
+    if symbol.upper() != "BTC-USD":
+        try:
+            import pandas_datareader.data as pdr
+
+            stooq_symbol = symbol
+            sdf = pdr.DataReader(stooq_symbol, "stooq", start=start.date(), end=end.date())
+            if not sdf.empty:
+                sdf = sdf.sort_index().reset_index().rename(columns={
+                    "Date": "date",
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume",
+                })
+                sdf["adj_close"] = sdf["close"]
+                sdf["date"] = pd.to_datetime(sdf["date"]).dt.date
+                sdf["load_ts"] = datetime.utcnow()
+                logger.info("Stooq primary fetched %d rows for %s", len(sdf), symbol)
+                return _finalize_prices_df(sdf[["date","open","high","low","close","adj_close","volume","load_ts"]])
+        except Exception as e:
+            logger.warning("Stooq primary failed for %s: %s", symbol, e)
+
     sess = _requests_session()
     tries = 3
     hist = pd.DataFrame()
@@ -111,31 +135,12 @@ def fetch_prices(symbol: str, start_override: Optional[datetime] = None, end_ove
         sleep(1 * attempt)
 
     if hist.empty:
-        logger.warning("Yahoo returned empty for %s; trying stooq fallback", symbol)
-        try:
-            import pandas_datareader.data as pdr
-
-            stooq_symbol = symbol
-            if symbol.upper() == "BTC-USD":
-                stooq_symbol = "BTCUSD"
-            sdf = pdr.DataReader(stooq_symbol, "stooq", start=start.date(), end=end.date())
-            if not sdf.empty:
-                sdf = sdf.sort_index()
-                sdf = sdf.reset_index().rename(columns={
-                    "Date": "date",
-                    "Open": "open",
-                    "High": "high",
-                    "Low": "low",
-                    "Close": "close",
-                    "Volume": "volume",
-                })
-                sdf["adj_close"] = sdf["close"]
-                sdf["date"] = pd.to_datetime(sdf["date"]).dt.date
-                sdf["load_ts"] = datetime.utcnow()
-                logger.info("Stooq fallback fetched %d rows for %s", len(sdf), symbol)
-                return _finalize_prices_df(sdf[["date","open","high","low","close","adj_close","volume","load_ts"]])
-        except Exception as e:
-            logger.warning("Stooq fallback failed for %s: %s", symbol, e)
+        logger.warning("Yahoo returned empty for %s; trying Alpha Vantage (equity) if configured", symbol)
+        if symbol.upper() != "BTC-USD" and config.ALPHAVANTAGE_API_KEY:
+            df_eq_av = _fetch_equity_alphavantage(symbol, start, end)
+            if not df_eq_av.empty:
+                logger.info("AlphaVantage (equity) fetched %d rows for %s", len(df_eq_av), symbol)
+                return _finalize_prices_df(df_eq_av)
         logger.error("No data returned for %s; start=%s end=%s", symbol, start.date(), end.date())
         return pd.DataFrame(columns=["date","open","high","low","close","adj_close","volume","load_ts"])  # nothing new
 
@@ -272,6 +277,51 @@ def _fetch_btc_binance(start: datetime, end: datetime) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df = df.sort_values("date")
     # Normalize to native date and filter using date objects
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    start_d = start.date()
+    end_d = end.date()
+    df = df[(df["date"] >= start_d) & (df["date"] <= end_d)]
+    df["load_ts"] = datetime.utcnow()
+    return df[["date","open","high","low","close","adj_close","volume","load_ts"]]
+
+
+def _fetch_equity_alphavantage(symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
+    """Fetch equity daily adjusted from Alpha Vantage if API key is set.
+
+    API: https://www.alphavantage.co/documentation/#dailyadj
+    """
+    import pandas as pd
+    key = config.ALPHAVANTAGE_API_KEY
+    if not key:
+        return pd.DataFrame()
+    url = (
+        "https://www.alphavantage.co/query"
+        f"?function=TIME_SERIES_DAILY_ADJUSTED&symbol={symbol}&outputsize=full&apikey=" + key
+    )
+    resp = requests.get(url, timeout=30)
+    if resp.status_code != 200:
+        return pd.DataFrame()
+    js = resp.json()
+    data = js.get("Time Series (Daily)", {})
+    if not data:
+        return pd.DataFrame()
+    recs = []
+    for d, vals in data.items():
+        try:
+            recs.append({
+                "date": pd.to_datetime(d).date(),
+                "open": float(vals.get("1. open", 0.0)),
+                "high": float(vals.get("2. high", 0.0)),
+                "low": float(vals.get("3. low", 0.0)),
+                "close": float(vals.get("4. close", 0.0)),
+                "adj_close": float(vals.get("5. adjusted close", vals.get("4. close", 0.0))),
+                "volume": float(vals.get("6. volume", 0.0)),
+            })
+        except Exception:
+            continue
+    if not recs:
+        return pd.DataFrame()
+    df = pd.DataFrame(recs)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     start_d = start.date()
     end_d = end.date()
