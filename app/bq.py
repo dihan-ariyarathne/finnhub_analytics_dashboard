@@ -105,6 +105,17 @@ def upsert_prices(symbol: str, df) -> int:
     VALUES (S.date, S.open, S.high, S.low, S.close, S.adj_close, S.volume, S.load_ts)
     """
     bq.query(merge_sql).result()
+    # Post-merge: ensure next_day_signal is fully populated using LEAD() over the table
+    update_sql = f"""
+    UPDATE `{target}` T
+    SET next_day_signal = COALESCE(S.next_signal, T.signal)
+    FROM (
+      SELECT as_of, LEAD(signal) OVER (ORDER BY as_of) AS next_signal
+      FROM `{target}`
+    ) S
+    WHERE T.as_of = S.as_of
+    """
+    bq.query(update_sql).result()
     # Clean up temp table
     try:
         bq.delete_table(temp_table)
